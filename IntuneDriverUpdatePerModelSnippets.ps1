@@ -36,7 +36,7 @@ Select-MgProfile -Name beta
 #Import-Module Microsoft.Graph.DeviceManagement.Actions
 
 # Get all unique Models in Intune with Windows as OS
-$IntuneDevices = Get-MgDeviceManagementManagedDevice -Filter "OperatingSystem eq 'Windows'" | Sort-Object -Property Model -Unique
+$IntuneDevices = Get-MgDeviceManagementManagedDevice -Filter "OperatingSystem eq 'Windows'" -All | Sort-Object -Property Model -Unique
 #$IntuneDevices | select Manufacturer, Model
 
 # Create AAD groups for each unique model
