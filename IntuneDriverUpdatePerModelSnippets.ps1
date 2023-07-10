@@ -8,7 +8,7 @@
 
     Version 0.0.0.2 - Works with PowerShell Graph SDK v2 (default). Set $GraphVersion to v1 or v2 depending on
                       the version you are using.
-                      Stole some some from @jarwidmark to normalize Manufacturer/Make.
+                      Stole some code from @jarwidmark to normalize Manufacturer/Make.
 #>
 
 # Set version of PowerShell Graph SDK that will be used, v1 or v2
@@ -17,7 +17,7 @@ $GraphVersion = "v2"
 # Set naming scheme (prefix and suffix) for Groups and Driver Update profiles name. Can be omitted by setting them to "".
 # Example result: DriverUpdate - LENOVO ThinkPad L13 Gen 3 - Pilot
 $NamePrefix = "GraphV2 - "
-$NameSuffix = " - Test"
+$NameSuffix = " - Test2"
 
 # Set Models to exclude creating groups and profiles for
 $ExcludedModels = @("Virtual Machine")
