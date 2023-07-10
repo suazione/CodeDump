@@ -1,15 +1,23 @@
-﻿<#
+<#
     Graph snippets for creating AAD dynamic groups, Driver update profiles and assignments for every unique device model in Intune.
-    Required modules: Microsoft.Graph.Authentication, Microsoft.Graph.DeviceManagement, Microsoft.Graph.Groups and Microsoft.Graph.DeviceManagement.Actions
+    Required modules: Microsoft.Graph.Authentication, Microsoft.Graph.DeviceManagement, Microsoft.Graph.Groups and
+    Microsoft.Graph.DeviceManagement.Actions (PowerShell Graph SDK v1) or Microsoft.Graph.Beta.DeviceManagement.Actions (PowerShell Graph SDK v2)
 
-    Version: 0.0.0.1
+    Updated: 2023-07-10
     Author: Sassan Fanai @ Onevinn.se
+
+    Version 0.0.0.2 - Works with PowerShell Graph SDK v2 (default). Set $GraphVersion to v1 or v2 depending on
+                      the version you are using.
+                      Stole some some from @jarwidmark to normalize Manufacturer/Make.
 #>
+
+# Set version of PowerShell Graph SDK that will be used, v1 or v2
+$GraphVersion = "v2"
 
 # Set naming scheme (prefix and suffix) for Groups and Driver Update profiles name. Can be omitted by setting them to "".
 # Example result: DriverUpdate - LENOVO ThinkPad L13 Gen 3 - Pilot
-$NamePrefix = "DriverUpdate - "
-$NameSuffix = " - Pilot"
+$NamePrefix = "GraphV2 - "
+$NameSuffix = " - Test"
 
 # Set Models to exclude creating groups and profiles for
 $ExcludedModels = @("Virtual Machine")
@@ -32,11 +40,14 @@ function Get-LenovoFriendlyName {
 
 # Connect to Graph
 Connect-MgGraph -Scopes "DeviceManagementManagedDevices.ReadWrite.All", "Group.ReadWrite.All", "DeviceManagementConfiguration.ReadWrite.All"
-Select-MgProfile -Name beta
+
+if ($GraphVersion -eq "v1") {
+    Select-MgProfile -Name beta # This cmdlet does not exist and thus not needed uf using Microsoft Graph PowerShell SDK v1
+}
 #Import-Module Microsoft.Graph.DeviceManagement.Actions
 
 # Get all unique Models in Intune with Windows as OS
-$IntuneDevices = Get-MgDeviceManagementManagedDevice -Filter "OperatingSystem eq 'Windows'" -All | Sort-Object -Property Model -Unique
+$IntuneDevices = Get-MgDeviceManagementManagedDevice -Filter "OperatingSystem eq 'Windows'" | Sort-Object -Property Model -Unique
 #$IntuneDevices | select Manufacturer, Model
 
 # Create AAD groups for each unique model
@@ -46,10 +57,26 @@ foreach ($Device in $IntuneDevices) {
         $Make = $Device.Manufacturer
         $Model = $Device.Model
 
-        if ($Make -eq "LENOVO") {
-            $Model = Get-LenovoFriendlyName -MTM $Model.Substring(0,4)
-            Write-Host "Manufacturer is [$Make]. Converting Model name from [$($Device.Model)] to [$Model] (for group/profile names)" -ForegroundColor Cyan
+        switch -Wildcard ($Make) {
+            "*Microsoft*" {
+                $Make = "Microsoft"
+            }
+            "*HP*" {
+                $Make = "HP"
+            }
+            "*Hewlett-Packard*" {
+                $Make = "HP"
+            }
+            "*Dell*" {
+                $Make = "Dell"
+            }
+            "*Lenovo*" {
+                $Make = "Lenovo"
+                $Model = Get-LenovoFriendlyName -MTM $Model.Substring(0,4)
+                Write-Host "Manufacturer is [$Make]. Converting Model name from [$($Device.Model)] to [$Model] (for group/profile names)" -ForegroundColor Cyan
+            }
         }
+
         $GroupName =  "$NamePrefix$($Make) $($Model)$($NameSuffix)"
 
         if ($Model.StartsWith($Make)) {
@@ -135,7 +162,16 @@ foreach ($DriverGroup in $AllDriverGroups) {
         }
 
         #Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/windowsDriverUpdateProfiles/$($DriverProfile.Id)/assignments" -Body (ConvertTo-Json $AssignBody) -ContentType "application/json"
-        Set-MgDeviceManagementWindowDriverUpdateProfile -WindowsDriverUpdateProfileId $DriverProfile.Id -BodyParameter $AssignBody
+
+        # If using Microsoft Graph PowerShell SDK v1
+        if ($GraphVersion -eq "v1") {
+            Set-MgDeviceManagementWindowDriverUpdateProfile -WindowsDriverUpdateProfileId $DriverProfile.Id -BodyParameter $AssignBody
+        }
+
+        # If using Microsoft Graph PowerShell SDK v2
+        if ($GraphVersion -eq "v2") {
+            Set-MgBetaDeviceManagementWindowsDriverUpdateProfile -WindowsDriverUpdateProfileId $DriverProfile.Id -BodyParameter $AssignBody
+        }
     }
     else {
         Write-Host "Driver Udate Profile [$($DriverProfile.displayname)] is already assigned to AAD group [$($DriverGroup.DisplayName)], skipping" -ForegroundColor Yellow
