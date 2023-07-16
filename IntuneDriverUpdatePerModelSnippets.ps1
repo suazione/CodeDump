@@ -3,12 +3,13 @@
     Required modules: Microsoft.Graph.Authentication, Microsoft.Graph.DeviceManagement, Microsoft.Graph.Groups and
     Microsoft.Graph.DeviceManagement.Actions (PowerShell Graph SDK v1) or Microsoft.Graph.Beta.DeviceManagement.Actions (PowerShell Graph SDK v2)
 
-    Updated: 2023-07-10
+    Updated: 2023-07-16
     Author: Sassan Fanai @ Onevinn.se
 
     Version 0.0.0.2 - Works with PowerShell Graph SDK v2 (default). Set $GraphVersion to v1 or v2 depending on
                       the version you are using.
                       Stole some code from @jarwidmark to normalize Manufacturer/Make.
+    Version 0.0.0.3 - Updated/fixed membership rule to use $Device.Manufacturer insted of normalized $Make. Thanks to BaconActual.
 #>
 
 # Set version of PowerShell Graph SDK that will be used, v1 or v2
@@ -85,7 +86,7 @@ foreach ($Device in $IntuneDevices) {
         }
 
         Write-Host "GroupName is [$GroupName]" -ForegroundColor Cyan
-        $MR = '(device.deviceModel -eq "' + $($Device.Model) + '") and (device.deviceManufacturer -eq "' + $Make + '")'
+        $MR = '(device.deviceModel -eq "' + $($Device.Model) + '") and (device.deviceManufacturer -eq "' + $($Device.Manufacturer) + '")'
         Write-Host "Dynamic MembershipRule = $MR" -ForegroundColor Magenta
 
         $ExistingGroup = Get-MgGroup -Filter "DisplayName eq '$GroupName'"
