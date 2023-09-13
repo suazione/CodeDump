@@ -263,3 +263,4 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communic
 Set-RegACL -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT AUTHORITY\System" -Permission ReadKey -Verbose
 
 Take-Ownership -Path "Registry::HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT SERVICE\TrustedInstaller" -Verbose
+Stop-Transcript
