@@ -11,8 +11,12 @@
  Sassan Fanai
  Version 1.0.0.1 - 2023-06-02 - Created
  Version 1.0.0.2 - 2023-07-05 - Remove MicrosotTeams (consumer) AppxPackage if installed
+ Version 1.0.0.3 - 2023-09-14 - Move Start-transcript to the top
 
 #>
+
+Start-Transcript -Path $env:TEMP\MSTeamsPersonalRemove.log
+
 function Set-RegACL {
     <#
     .SYNOPSIS
@@ -161,7 +165,6 @@ $AdjustTokenPrivileges=@"
     }
 
     Process {
-      Start-Transcript -Path $env:TEMP\MSTeamsPersonalRemove.log
       $Item=Get-Item $Path
       Write-Verbose "Giving current process token ownership rights"
       Add-Type $AdjustTokenPrivileges -PassThru > $null
