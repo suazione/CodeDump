@@ -12,10 +12,18 @@
  Version 1.0.0.1 - 2023-06-02 - Created
  Version 1.0.0.2 - 2023-07-05 - Remove MicrosotTeams (consumer) AppxPackage if installed
  Version 1.0.0.3 - 2023-09-14 - Move Start-transcript to the top
-
+ Version 1.0.0.4 - 2023-11-07 - Added default log location and some more output
 #>
 
-Start-Transcript -Path $env:TEMP\MSTeamsPersonalRemove.log
+$LogFileName = "BlockConsumerTeams.log"
+$LogPath = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\CCM\Logging\@Global" -Name "LogDirectory"
+if (!$LogPath) {
+    $LogPath = $env:TEMP
+}
+$LogFile = Join-Path -Path $LogPath -ChildPath $LogFileName
+
+Start-Transcript -Path $LogFile
+
 
 function Set-RegACL {
     <#
@@ -258,12 +266,19 @@ $AdjustTokenPrivileges=@"
       }
   }
 
-
+Write-Output "Setting ownership of registry key to SYSTEM"
 Take-Ownership -Path "Registry::HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT AUTHORITY\System" -Verbose
 
+Write-Output "Setting FullControl ACL on registry key for SYSTEM"
 Set-RegACL -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT AUTHORITY\System" -Permission FullControl -Verbose
+
+Write-Output "Setting ConfigureChatAutoInstall to 0"
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -Name "ConfigureChatAutoInstall" -Value "0" -PropertyType Dword -Force | Out-Null
+
+Write-Output "Restoring ReadKey ACL on registry key for SYSTEM"
 Set-RegACL -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT AUTHORITY\System" -Permission ReadKey -Verbose
 
+Write-Output "Restoring ownership of registry key back to TrustedInstaller"
 Take-Ownership -Path "Registry::HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -User "NT SERVICE\TrustedInstaller" -Verbose
+
 Stop-Transcript
