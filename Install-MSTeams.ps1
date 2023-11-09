@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 This script installs/uninstalls Microsoft Teams (New) either offline or online using Teamsbootstrapper.
 
@@ -13,7 +13,7 @@ The name  of the executable file for the MSTeams installation bootstrapper. Defa
 The name of the MSIX file for offline installation of MSTeams, only required if using -Offline. Default is "MSTeams-x64.msix".
 
 .PARAMETER LogFile
-The path to the log file where the installation process will be logged. Default is "$env:TEMP\Install-MSTeams.log".
+The path to the log file where the install/uninstall process will be logged. Default is "$env:TEMP\Install-MSTeams.log".
 
 .PARAMETER TryFix
 A switch parameter that, when present, will rey to fix and retry the installation of MSTeams if it fails with errorCode "0x80004004" by first deleting the regsitry key:
@@ -23,7 +23,10 @@ HKLM\Software\Wow6432Node\Microsoft\Office\Teams
 A switch parameter that, when present, will initiate an offline installation of MSTeams using the local MSIX file.
 
 .PARAMETER Uninstall
-A switch parameter that, when present, will deprovision MSTeams using the Teamsbootstrapper.exe and uninstall the MSTeams AppcPackage for AllUsers .
+A switch parameter that, when present, will deprovision MSTeams using the Teamsbootstrapper.exe and uninstall the MSTeams AppcPackage for AllUsers.
+
+.PARAMETER ForceInstall
+A switch parameter that, when present, will uninstall and deprovision MSTeams before attempting installation.
 
 .EXAMPLE
 .\Install-MSTeams.ps1
@@ -43,8 +46,15 @@ Executes the script to deprovision and uninstall MSTeams for all users.
 
 .NOTES
 Author:     Sassan Fanai
-Date:       2023-11-06
-Version:    1.0.0.0
+Date:       2023-11-09
+Version:    1.0.0.5
+
+Install command example: PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
+Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
+Detection script example 2: $MinVersion = "23285.3604.2469.4152"
+                            $MSTeams = Get-ProvisionedAppPackage -Online |  Where-Object {$PSitem.DisplayName -like "MSTeams"}
+                            if ($MSTeams.version -ge [version]$MinVersion ) { Write-Output "Installed" }
+
 #>
 
 param (
@@ -53,7 +63,8 @@ param (
     $LogFile = "$env:TEMP\Install-MSTeams.log",
     [switch]$TryFix,
     [switch]$Offline,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$ForceInstall
 )
 
 function Install-MSTeams {
@@ -71,102 +82,169 @@ function Install-MSTeams {
 }
 
 function Uninstall-MSTeams {
-    $InstalledAppx = Get-AppxPackage -AllUsers | Where-Object {$PSItem.Name -eq "MSTeams"}
-    if ($InstalledAppx) {
-        Log "$(Get-Now): MSTeams $($InstalledAppx.Version) package is installed for these users:"
-        Log "$(Get-Now): PackageUserInformation $($InstalledAppx.PackageUserInformation.UserSecurityId.UserName)"
-        Log "$(Get-Now): Uninstalling AppxPackage for AllUsers"
-        $InstalledAppx | Remove-AppxPackage -AllUsers
+    $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem.Name -eq "MSTeams"}
+    if ($Appx) {
+        Log "MSTeams $($Appx.Version) package is installed for these users:" -NoOutput
+        Log "PackageUserInformation: $($Appx.PackageUserInformation.UserSecurityId.UserName)" -NoOutput
+        Log "Uninstalling AppxPackage for AllUsers" -NoOutput
+        $Appx | Remove-AppxPackage -AllUsers
     }
-    Log "$(Get-Now): Deprovisioning MSTeams using $EXE"
+    Log "Deprovisioning MSTeams using $EXE" -NoOutput
     $Result = & "$PSScriptRoot\$EXE" -x
 
     $ResultPSO = $Result | ConvertFrom-Json
     return $ResultPSO
 }
 
-function Get-Now { return "{0:yyyy-MM-dd HH:mm:ss}" -f [DateTime]::Now }
+function IsAppInstalled {
+    param (
+        $AppName = "MSTeams"
+    )
+    $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq $AppName}
+    $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq $AppName}
+    if ($Appx) {
+        Log "$AppName AppxPackage ($Appx) is currently installed for these users:"
+        Log "PackageUserInformation: $($Appx.PackageUserInformation.UserSecurityId.UserName)"
+    }
+    else {
+        Log "$AppName AppxPackage is currently NOT installed for any user"
+    }
+    if ($ProvApp) {
+        Log "$AppName ProvisionedAppPackage ($($ProvApp.PackageName)) is currently installed"
+    }
+    else {
+        Log "$AppName ProvisionedAppPackage is currently NOT installed"
+    }
+}
 
 function Log {
     param (
-        $Text
+        $Text,
+        $LogFile = $LogFile,
+        [switch]$NoOutput,
+        [switch]$NoLog
      )
 
-    $Text | Out-File -FilePath $LogFile -Append
-    Write-Output $Text
+     $Now = "{0:yyyy-MM-dd HH:mm:ss}" -f [DateTime]::Now
+     if (!$NoLog) {
+        "$Now`: $($Text)" | Out-File -FilePath $LogFile -Append
+    }
+    if (!$NoOutput) {
+        Write-Output "$Now`: $($Text)"
+    }
 }
 
 if (-not(Test-Path -Path $PSScriptRoot\$EXE)) {
-    Log "$(Get-Now): Could not find $EXE"
+    Log "Failed to find $EXE"
     exit 2
 }
 
 $EXEinfo = Get-ChildItem -Path "$PSScriptRoot\$EXE"
-Log "$(Get-Now): $EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
 
 if ($Uninstall) {
     $LogFile = $LogFile.Replace("Install","Uninstall")
+    Log "Attempting to uninstall MSTeams"
+    Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
+
     $result = Uninstall-MSTeams
     $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq "MSTeams"}
     $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
 
     if (!$Appx -and !$ProvApp) {
-        Log "$(Get-Now): MSTeams was successfully deprovisioned and uninstalled for all users"
+        Log "MSTeams was successfully deprovisioned and uninstalled for all users"
+        IsAppInstalled "MSTeams"
         exit 0
     }
     else {
-        Log "$(Get-Now): Error uninstalling MSTeans"
-        Log "$(Get-Now): Result AppxPackage: $Appx"
-        Log "$(Get-Now): Result Get-ProvisionedAppPackage: $ProvApp"
+        Log "Error uninstalling MSTeams: $Result"
+        IsAppInstalled "MSTeams"
         exit 1
     }
 }
 
 if ($Offline) {
     if (-not(Test-Path -Path "$PSScriptRoot\$MSIX")) {
-        Log "$(Get-Now): Offline parameter specified but could not find $MSIX"
+        Log "Offline parameter specified but failed to find $MSIX"
         exit 2
     }
+    Log "Attempting to install MSTeams offline"
     $MSIXinfo = Get-AppLockerFileInformation "$PSScriptRoot\$MSIX"
-    Log "$(Get-Now): $MSIX version is $($MSIXinfo.Publisher.BinaryVersion.ToString())"
+    Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
+    Log "$MSIX version is $($MSIXinfo.Publisher.BinaryVersion.ToString())"
 
+    if ($ForceInstall) {
+        Log "ForceInstall parameter was specified, will attempt to uninstall and deprovision MSTeams before installing"
+        $result = Uninstall-MSTeams
+        Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
+        $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq "MSTeams"}
+        $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
+
+        if (!$Appx -and !$ProvApp) {
+            Log "MSTeams was successfully deprovisioned and uninstalled for all users"
+        }
+        else {
+            Log "Error uninstalling MSTeams: $Result"
+            IsAppInstalled "MSTeams"
+        }
+    }
     $result = Install-MSTeams -Offline
     if ($result.Success) {
-        Log "$(Get-Now): $EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
+        Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
         exit 0
     }
     if ($result.errorCode -eq "0x80004004" -and $TryFix) {
-        Log "$(Get-Now): $EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will try to delete it and re-run installation"
+        Log "$EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will try to delete it and re-run installation"
         Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
         $result = Install-MSTeams -Offline
         if ($result.Success) {
-            Log "$(Get-Now): $EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
+            Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
             exit 0
         }
-
     }
-    Log "$(Get-Now): Error installing MSTeams offline using $EXE ($($EXEinfo.VersionInfo.ProductVersion)) and $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString()))"
-    Log "$(Get-Now): $EXE returned errorCode = $($result.errorCode)"
-    Log "$(Get-Now): Result: $result"
+    Log "Error installing MSTeams offline using $EXE ($($EXEinfo.VersionInfo.ProductVersion)) and $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString()))"
+    Log "$EXE returned errorCode = $($result.errorCode)"
+    Log "Result: $result"
+    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall it prior to installation"
+    IsAppInstalled "MSTeams"
     exit 1
 }
 else {
+    Log "Attempting to install MSTeams online with $EXE"
+    Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
+    if ($ForceInstall) {
+        Log "ForceInstall parameter was specified, will attempt to uninstall and deprovision MSTeams before install"
+        $result = Uninstall-MSTeams
+        Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
+        $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq "MSTeams"}
+        $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
+
+        if (!$Appx -and !$ProvApp) {
+            Log "MSTeams was successfully deprovisioned and uninstalled for all users"
+        }
+        else {
+            Log "Error uninstalling MSTeams: $Result"
+            IsAppInstalled "MSTeams"
+        }
+    }
+
     $result = Install-MSTeams
     if ($result.Success) {
-        Log "$(Get-Now): $EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
+        Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
         exit 0
     }
     if ($result.errorCode -eq "0x80004004" -and $TryFix) {
-        Log "$(Get-Now): $EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will try to delete it and re-run installation"
+        Log "$EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will attempt to delete it and re-run installation"
         Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
         $result = Install-MSTeams
         if ($result.Success) {
-            Log "$(Get-Now): $EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
+            Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
             exit 0
         }
     }
-    Log "$(Get-Now): Error installing MSTeams online using $EXE ($($EXEinfo.VersionInfo.ProductVersion))"
-    Log "$(Get-Now): $EXE returned errorCode = $($result.errorCode)"
-    Log "$(Get-Now): Result: $result"
+    Log "Error installing MSTeams online using $EXE ($($EXEinfo.VersionInfo.ProductVersion))"
+    Log "$EXE returned errorCode = $($result.errorCode)"
+    Log "Result: $result"
+    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall it prior to installation"
+    IsAppInstalled "MSTeams"
     exit 1
 }
