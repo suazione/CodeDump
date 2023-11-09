@@ -47,14 +47,13 @@ Executes the script to deprovision and uninstall MSTeams for all users.
 .NOTES
 Author:     Sassan Fanai
 Date:       2023-11-09
-Version:    1.0.0.5
+Version:    1.0.0.6
 
 Install command example: PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
 Detection script example 2: $MinVersion = "23285.3604.2469.4152"
                             $MSTeams = Get-ProvisionedAppPackage -Online |  Where-Object {$PSitem.DisplayName -like "MSTeams"}
                             if ($MSTeams.version -ge [version]$MinVersion ) { Write-Output "Installed" }
-
 #>
 
 param (
@@ -77,8 +76,13 @@ function Install-MSTeams {
     else {
         $Result = & "$PSScriptRoot\$EXE" -p
     }
-    $ResultPSO = $Result | ConvertFrom-Json
-    return $ResultPSO
+    $ResultPSO = try { $Result | ConvertFrom-Json } catch {$null}
+    if ($null -ne $ResultPSO) {
+        return $ResultPSO
+    }
+    else {
+        return $Result
+    }
 }
 
 function Uninstall-MSTeams {
@@ -92,8 +96,13 @@ function Uninstall-MSTeams {
     Log "Deprovisioning MSTeams using $EXE" -NoOutput
     $Result = & "$PSScriptRoot\$EXE" -x
 
-    $ResultPSO = $Result | ConvertFrom-Json
-    return $ResultPSO
+    $ResultPSO = try { $Result | ConvertFrom-Json } catch {$null}
+    if ($null -ne $ResultPSO) {
+        return $ResultPSO
+    }
+    else {
+        return $Result
+    }
 }
 
 function IsAppInstalled {
