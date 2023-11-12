@@ -54,9 +54,9 @@ These are the recommended parameters for installation.
 .NOTES
 Author:     Sassan Fanai
 Date:       2023-11-09
-Version:    1.0.2.0 - Added SetRunOnce and CreateScheduledTask functions. -TryFix param has been replaced by -ForceInstall.
+Version:    1.0.2.1 - Added SetRunOnce and CreateScheduledTask functions. -TryFix param has been replaced by -ForceInstall.
 
-Install command example: PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
+Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
 Detection script example 2: $MinVersion = "23285.3604.2469.4152"
                             $MSTeams = Get-ProvisionedAppPackage -Online |  Where-Object {$PSitem.DisplayName -like "MSTeams"}
