@@ -5,6 +5,7 @@ This script installs/uninstalls Microsoft Teams (New) either offline or online u
 .DESCRIPTION
 The script performs an installation/uninstallation of Microsoft Teams (New) by executing the Teamsbootstrapper.exe with the appropriate flags based on the invocation parameters.
 It supports offline installation using a local MSIX package or an online installation that downloads the necessary files. The process is logged in a specified log file.
+In an attempt to make the installation experience better and faster the -ForceInstall and -SetRunOnce parameters were made
 
 .PARAMETER EXE
 The name  of the executable file for the MSTeams installation bootstrapper. Default is "Teamsbootstrapper.exe".
@@ -15,18 +16,22 @@ The name of the MSIX file for offline installation of MSTeams, only required if 
 .PARAMETER LogFile
 The path to the log file where the install/uninstall process will be logged. Default is "$env:TEMP\Install-MSTeams.log".
 
-.PARAMETER TryFix
-A switch parameter that, when present, will rey to fix and retry the installation of MSTeams if it fails with errorCode "0x80004004" by first deleting the regsitry key:
-HKLM\Software\Wow6432Node\Microsoft\Office\Teams
-
 .PARAMETER Offline
 A switch parameter that, when present, will initiate an offline installation of MSTeams using the local MSIX file.
 
 .PARAMETER Uninstall
 A switch parameter that, when present, will deprovision MSTeams using the Teamsbootstrapper.exe and uninstall the MSTeams AppcPackage for AllUsers.
+Uninstall will delete the registry key: HKLM\Software\Wow6432Node\Microsoft\Office\Teams that can can block installations of MSTeams.
+Uninstall will attempt to remove InstallMSTeams RunOnce registry item for Default User and existing profiles that may have been set by SetRunOnce.
 
 .PARAMETER ForceInstall
-A switch parameter that, when present, will uninstall and deprovision MSTeams before attempting installation.
+A switch parameter that, when present, will uninstall and deprovision MSTeams before attempting installation. It will also delete the registry key:
+HKLM\Software\Wow6432Node\Microsoft\Office\Teams that can can block the installation of MSTeams.
+
+.PARAMETER SetRunOnce
+A switch parameter that, when present, will configure RunOnce registry value for the Default User profile and all existing profiles to speed up installation of
+MSTeams after a user sign in. The RunOnce key will be deleted when uninstalling MSTeams using -Uninstall.
+If there is a active currently logged on user, a scheduled task will be be created that installs MSTeams as an AppxPackage to speed up the installation.
 
 .EXAMPLE
 .\Install-MSTeams.ps1
@@ -37,17 +42,19 @@ Executes the script to install MSTeams online with default parameters.
 Executes the script to install MSTeams offline using the specified MSIX file.
 
 .EXAMPLE
-.\Install-MSTeams.ps1 -TryFix
-Executes the script and attempts to force the installation if certain errors are encountered.
-
-.EXAMPLE
 .\Install-MSTeams.ps1 Uninstall
 Executes the script to deprovision and uninstall MSTeams for all users.
+
+.EXAMPLE
+.\Install-MSTeams.ps1  -ForceInstall -SetRunOnce
+Executes the script and attempts to force the installation by uninstalling MSTeams before attepmting an installation.
+SetRunOnce will add a RunOnce registry entry and scheduled task to speed up the installation of MSTeams.
+These are the recommended parameters for installation.
 
 .NOTES
 Author:     Sassan Fanai
 Date:       2023-11-09
-Version:    1.0.0.6
+Version:    1.0.2.0 - Added SetRunOnce and CreateScheduledTask functions. -TryFix param has been replaced by -ForceInstall.
 
 Install command example: PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
@@ -55,16 +62,126 @@ Detection script example 2: $MinVersion = "23285.3604.2469.4152"
                             $MSTeams = Get-ProvisionedAppPackage -Online |  Where-Object {$PSitem.DisplayName -like "MSTeams"}
                             if ($MSTeams.version -ge [version]$MinVersion ) { Write-Output "Installed" }
 #>
-
+[CmdletBinding()]
 param (
     $EXE = "Teamsbootstrapper.exe",
     $MSIX = "MSTeams-x64.msix",
     $LogFile = "$env:TEMP\Install-MSTeams.log",
-    [switch]$TryFix,
     [switch]$Offline,
     [switch]$Uninstall,
-    [switch]$ForceInstall
+    [Alias("TryFix")]
+    [switch]$ForceInstall,
+    [switch]$SetRunOnce
 )
+
+#region functions
+function CreateScheduledTask {
+    param (
+        $TaskName = "InstallMSTeams",
+        $PackageName
+    )
+    Log "Running CreateScheduledTask function"    
+    $LoggedOnUsers = ((query user) -replace '\s{20,39}', ',,') -replace '\s{2,}', ',' | 
+        ConvertFrom-Csv | Select-Object USERNAME, ID, STATE, @{n='IdleTime';e='IDLE TIME'}, @{n='LogonTime';e='LOGON TIME'}
+    $ActiveUser = $LoggedOnUsers | Where-Object {$_.State -eq "Active" } | Select-Object -ExpandProperty Username
+
+    if (-not $ActiveUser) {
+        Log "No active user currently logged on"
+        return
+    }
+    else {
+        $ActiveUser = $ActiveUser.Replace(">","")
+        Log "Active user currently logged on is: $ActiveUser"        
+    }
+
+    Log "Creating scheduled task that will run for the current logged on user to speed up the installation"
+    $commands = "Add-AppxPackage -RegisterByFamilyName -MainPackage $PackageName -EA SilentlyContinue"
+    Log "Creating scheduled task [$taskName] that will run [$commands] for the currently logged on user [$ActiveUser]"
+    # Create the action to execute the PowerShell commands
+    $action = New-ScheduledTaskAction -Execute "cmd" -Argument "/c start /min `"`" powershell.exe -EP Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -Command `"$commands`""
+
+    # Set the trigger for immediate execution
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(1)
+
+    # Run in the user context
+    $principal = New-ScheduledTaskPrincipal -UserId "$($ActiveUser)" -LogonType Interactive
+
+    # Define task settings
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -StartWhenAvailable
+
+    # Register the task (hidden)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+
+    Log "Sleeping for a couple of seconds before removing the scheduled task [$taskName] "
+    Start-Sleep -Seconds 5
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+}
+
+
+function SetRunOnce {
+    param (
+        $PackageName,
+        $RunOnceRegName,
+        [switch]$Delete
+    )
+    Log "Running SetRunOnce function"
+    Log "Loading NTUSER.DAT for Default User"
+    $load = REG.EXE LOAD HKLM\Default C:\Users\Default\NTUSER.DAT
+
+    $Value = "cmd /c start /min `"`" powershell.exe -EP Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -Command `"Add-AppxPackage -RegisterByFamilyName -MainPackage $PackageName -EA SilentlyContinue`""
+    if ($Delete) {
+        Log "Delete parameter was specified for SetRunOnce function"
+        $RunOnceReg = Get-ItemProperty -Path "HKLM:\Default\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name $RunOnceRegName -ErrorAction SilentlyContinue
+        if ($RunOnceReg) {
+            Log "Deleting $RunOnceRegName RunOnce entry from Default User profile"
+            $reg = Remove-ItemProperty -Path "$($RunOnceReg.PSPath)" -Name $RunOnceRegName -Force
+        }
+    }
+    else {
+        Log "Creating RunOnce registry value: $value"
+        $reg = New-ItemProperty -Path "HKLM:\Default\Software\Microsoft\Windows\CurrentVersion\RunOnce" -PropertyType "String" -Name "$($RunOnceRegName)" -Value $Value -Force
+    }
+
+    Log "Running garbage collect and unloading Default User profile"
+    try { $reg.Handle.Close() } catch {}
+    [GC]::Collect()
+    $unload = REG.EXE UNLOAD HKLM\Default
+
+    # Run for existing profiles
+    $UserProfiles = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*" |
+    Where-Object {$_.PSChildName -match "S-1-5-21-(\d+-?){4}$" } |
+        Select-Object @{Name="SID"; Expression={$_.PSChildName}}, @{Name="UserHive";Expression={"$($_.ProfileImagePath)\NTuser.dat"}}
+
+    foreach ($UserProfile in $UserProfiles) {
+        # Load User NTUser.dat if it's not already loaded
+        if (($ProfileWasLoaded = Test-Path Registry::HKEY_USERS\$($UserProfile.SID)) -eq $false) {
+            Log "Loading NTUSER.DAT for profile: $($UserProfile.UserHive)"
+            Start-Process -FilePath "CMD.EXE" -ArgumentList "/C REG.EXE LOAD HKU\$($UserProfile.SID) $($UserProfile.UserHive)" -Wait -WindowStyle Hidden
+        }
+        else {
+            Log "Profile already loaded for: $($UserProfile.UserHive), no need to load NTUSER.DAT"
+        }
+        if ($Delete) {
+            $RunOnceReg = Get-ItemProperty -Path "registry::HKEY_USERS\$($UserProfile.SID)\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name $RunOnceRegName -ErrorAction SilentlyContinue
+            if ($RunOnceReg) {
+                Log "Deleting $RunOnceRegName RunOnce entry from the user hive for: $($UserProfile.UserHive)"
+                $reg = Remove-ItemProperty -Path "$($RunOnceReg.PSPath)" -Name $RunOnceRegName -Force
+            }
+        }
+        else {
+            Log "Creating RunOnce registry value for: $($UserProfile.UserHive) with SID $($UserProfile.SID)"
+            $reg = New-ItemProperty "registry::HKEY_USERS\$($UserProfile.SID)\Software\Microsoft\Windows\CurrentVersion\RunOnce" -PropertyType "String" -Name "$($RunOnceRegName)" -Value $Value -Force
+        }
+
+        try { $reg.Handle.Close() } catch {}
+        if ($ProfileWasLoaded -eq $false) {
+            Log "Running garbage collector and unloading user profile: $($UserProfile.UserHive)"
+            [GC]::Collect()
+            Start-Sleep 1
+            Start-Process -FilePath "CMD.EXE" -ArgumentList "/C REG.EXE UNLOAD HKU\$($UserProfile.SID)" -Wait -WindowStyle Hidden
+        }
+    }
+}
 
 function Install-MSTeams {
     param (
@@ -86,10 +203,10 @@ function Install-MSTeams {
 }
 
 function Uninstall-MSTeams {
+    Log "Running Uninstall-MSTeams function" -NoOutput
     $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem.Name -eq "MSTeams"}
     if ($Appx) {
-        Log "MSTeams $($Appx.Version) package is installed for these users:" -NoOutput
-        Log "PackageUserInformation: $($Appx.PackageUserInformation.UserSecurityId.UserName)" -NoOutput
+        Log "MSTeams $($Appx.Version) package is installed for these users: $($Appx.PackageUserInformation.UserSecurityId.UserName)" -NoOutput
         Log "Uninstalling AppxPackage for AllUsers" -NoOutput
         $Appx | Remove-AppxPackage -AllUsers
     }
@@ -112,8 +229,7 @@ function IsAppInstalled {
     $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq $AppName}
     $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq $AppName}
     if ($Appx) {
-        Log "$AppName AppxPackage ($Appx) is currently installed for these users:"
-        Log "PackageUserInformation: $($Appx.PackageUserInformation.UserSecurityId.UserName)"
+        Log "$AppName AppxPackage ($Appx) is currently installed for these users: $($Appx.PackageUserInformation.UserSecurityId.UserName)"
     }
     else {
         Log "$AppName AppxPackage is currently NOT installed for any user"
@@ -143,6 +259,8 @@ function Log {
     }
 }
 
+#endregion functions
+
 if (-not(Test-Path -Path $PSScriptRoot\$EXE)) {
     Log "Failed to find $EXE"
     exit 2
@@ -153,6 +271,7 @@ $EXEinfo = Get-ChildItem -Path "$PSScriptRoot\$EXE"
 if ($Uninstall) {
     $LogFile = $LogFile.Replace("Install","Uninstall")
     Log "Attempting to uninstall MSTeams"
+    IsAppInstalled "MSTeams"
     Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
 
     $result = Uninstall-MSTeams
@@ -160,8 +279,10 @@ if ($Uninstall) {
     $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
 
     if (!$Appx -and !$ProvApp) {
-        Log "MSTeams was successfully deprovisioned and uninstalled for all users"
-        IsAppInstalled "MSTeams"
+        Log "Deleting registry key (if it exists): HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams"
+        Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
+        Log "MSTeams is not installed as a ProvisionedAppPackage or AppxPackage for any user"
+        SetRunOnce -RunOnceRegName "InstallMSTeams" -Delete
         exit 0
     }
     else {
@@ -176,20 +297,22 @@ if ($Offline) {
         Log "Offline parameter specified but failed to find $MSIX"
         exit 2
     }
-    Log "Attempting to install MSTeams offline"
+    Log "Attempting to install MSTeams offline with local MSIX"
     $MSIXinfo = Get-AppLockerFileInformation "$PSScriptRoot\$MSIX"
     Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
     Log "$MSIX version is $($MSIXinfo.Publisher.BinaryVersion.ToString())"
 
     if ($ForceInstall) {
         Log "ForceInstall parameter was specified, will attempt to uninstall and deprovision MSTeams before installing"
+        IsAppInstalled "MSTeams"
         $result = Uninstall-MSTeams
+        Log "Deleting registry key (if it exists): HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams"
         Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
         $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq "MSTeams"}
         $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
 
         if (!$Appx -and !$ProvApp) {
-            Log "MSTeams was successfully deprovisioned and uninstalled for all users"
+            "MSTeams is not installed as a ProvisionedAppPackage or AppxPackage for any user"
         }
         else {
             Log "Error uninstalling MSTeams: $Result"
@@ -199,21 +322,19 @@ if ($Offline) {
     $result = Install-MSTeams -Offline
     if ($result.Success) {
         Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
+        if ($SetRunOnce) {
+            $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
+            Log "SetRunOnce parameter specified, attempting to configure RunOnce registry key for Default User and existing profiles to speed up installation of MSTeams after sign in"
+            SetRunOnce -PackageName "$($ProvApp.PackageName)" -RunOnceRegName "InstallMSTeams"
+            CreateScheduledTask -PackageName "$($ProvApp.PackageName)"
+        }
         exit 0
     }
-    if ($result.errorCode -eq "0x80004004" -and $TryFix) {
-        Log "$EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will try to delete it and re-run installation"
-        Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
-        $result = Install-MSTeams -Offline
-        if ($result.Success) {
-            Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
-            exit 0
-        }
-    }
+
     Log "Error installing MSTeams offline using $EXE ($($EXEinfo.VersionInfo.ProductVersion)) and $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString()))"
     Log "$EXE returned errorCode = $($result.errorCode)"
     Log "Result: $result"
-    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall it prior to installation"
+    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall MSTeams prior to installation"
     IsAppInstalled "MSTeams"
     exit 1
 }
@@ -223,12 +344,13 @@ else {
     if ($ForceInstall) {
         Log "ForceInstall parameter was specified, will attempt to uninstall and deprovision MSTeams before install"
         $result = Uninstall-MSTeams
+        Log "Deleting registry key (if it exists): HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams"
         Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
         $Appx = Get-AppxPackage -AllUsers | Where-Object {$PSItem. Name -eq "MSTeams"}
         $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
 
         if (!$Appx -and !$ProvApp) {
-            Log "MSTeams was successfully deprovisioned and uninstalled for all users"
+            Log "MSTeams is not installed as a ProvisionedAppPackage or AppxPackage for any user"
         }
         else {
             Log "Error uninstalling MSTeams: $Result"
@@ -239,17 +361,15 @@ else {
     $result = Install-MSTeams
     if ($result.Success) {
         Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
+        if ($SetRunOnce) {
+            $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
+            Log "SetRunOnce parameter specified, attempting to configure RunOnce registry key for Default User and existing profiles to speed up installation of MSTeams after sign in"
+            SetRunOnce -PackageName "$($ProvApp.PackageName)" -RunOnceRegName "InstallMSTeams"
+            CreateScheduledTask -PackageName "$($ProvApp.PackageName)"
+        }
         exit 0
     }
-    if ($result.errorCode -eq "0x80004004" -and $TryFix) {
-        Log "$EXE returned errorCode $($result.errorCode) and -TryFix was specified. This may happen if the registry key HKLM\Software\Wow6432Node\Microsoft\Office\Teams exists, will attempt to delete it and re-run installation"
-        Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Teams -Force -ErrorAction SilentlyContinue
-        $result = Install-MSTeams
-        if ($result.Success) {
-            Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully downloaded and installed MSTeams"
-            exit 0
-        }
-    }
+
     Log "Error installing MSTeams online using $EXE ($($EXEinfo.VersionInfo.ProductVersion))"
     Log "$EXE returned errorCode = $($result.errorCode)"
     Log "Result: $result"
