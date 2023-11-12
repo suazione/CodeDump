@@ -53,8 +53,8 @@ These are the recommended parameters for installation.
 
 .NOTES
 Author:     Sassan Fanai
-Date:       2023-11-09
-Version:    1.0.2.1 - Added SetRunOnce and CreateScheduledTask functions. -TryFix param has been replaced by -ForceInstall.
+Date:       2023-11-13
+Version:    1.0.2.1 - Added SetRunOnce and CreateScheduledTask functions to speed up install. -TryFix param has been replaced by -ForceInstall.
 
 Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
@@ -80,8 +80,8 @@ function CreateScheduledTask {
         $TaskName = "InstallMSTeams",
         $PackageName
     )
-    Log "Running CreateScheduledTask function"    
-    $LoggedOnUsers = ((query user) -replace '\s{20,39}', ',,') -replace '\s{2,}', ',' | 
+    Log "Running CreateScheduledTask function"
+    $LoggedOnUsers = ((query user) -replace '\s{20,39}', ',,') -replace '\s{2,}', ',' |
         ConvertFrom-Csv | Select-Object USERNAME, ID, STATE, @{n='IdleTime';e='IDLE TIME'}, @{n='LogonTime';e='LOGON TIME'}
     $ActiveUser = $LoggedOnUsers | Where-Object {$_.State -eq "Active" } | Select-Object -ExpandProperty Username
 
@@ -91,7 +91,7 @@ function CreateScheduledTask {
     }
     else {
         $ActiveUser = $ActiveUser.Replace(">","")
-        Log "Active user currently logged on is: $ActiveUser"        
+        Log "Active user currently logged on is: $ActiveUser"
     }
 
     Log "Creating scheduled task that will run for the current logged on user to speed up the installation"
@@ -373,7 +373,7 @@ else {
     Log "Error installing MSTeams online using $EXE ($($EXEinfo.VersionInfo.ProductVersion))"
     Log "$EXE returned errorCode = $($result.errorCode)"
     Log "Result: $result"
-    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall it prior to installation"
+    Log "Installation will fail if the AppxPackage is already installed for any user. You can run the script with -ForceInstall to uninstall MSTeams prior to installation"
     IsAppInstalled "MSTeams"
     exit 1
 }
