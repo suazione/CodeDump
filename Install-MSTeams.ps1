@@ -42,11 +42,11 @@ Executes the script to install MSTeams online with default parameters.
 Executes the script to install MSTeams offline using the specified MSIX file.
 
 .EXAMPLE
-.\Install-MSTeams.ps1 Uninstall
+.\Install-MSTeams.ps1 -Uninstall
 Executes the script to deprovision and uninstall MSTeams for all users.
 
 .EXAMPLE
-.\Install-MSTeams.ps1  -ForceInstall -SetRunOnce
+.\Install-MSTeams.ps1 -ForceInstall -SetRunOnce
 Executes the script and attempts to force the installation by uninstalling MSTeams before attepmting an installation.
 SetRunOnce will add a RunOnce registry entry and scheduled task to speed up the installation of MSTeams.
 These are the recommended parameters for installation.
