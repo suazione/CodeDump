@@ -33,9 +33,13 @@ A switch parameter that, when present, will configure RunOnce registry value for
 MSTeams after a user sign in. The RunOnce key will be deleted when uninstalling MSTeams using -Uninstall.
 If there is a active currently logged on user, a scheduled task will be be created that installs MSTeams as an AppxPackage to speed up the installation.
 
+.PARAMETER DownloadExe
+A switch parameter that, when present, will attempt to download Teamsbootstrapper.exe from Microsoft and verify its digital signature.
+Using this parameter removes the need to include a local Teamsbootstrapper.exe. Has to be specified for -Uninstall as well.
+
 .EXAMPLE
 .\Install-MSTeams.ps1
-Executes the script to install MSTeams online with default parameters.
+Executes the script to install MSTeams "online" with default parameters.
 
 .EXAMPLE
 .\Install-MSTeams.ps1 -Offline
@@ -46,6 +50,10 @@ Executes the script to install MSTeams offline using the specified MSIX file.
 Executes the script to deprovision and uninstall MSTeams for all users.
 
 .EXAMPLE
+.\Install-MSTeams.ps1 -DownloadExe
+Executes the script to first download the Teamsbootstrapper.exe from Microsoft and then install MSTeams "online".
+
+.EXAMPLE
 .\Install-MSTeams.ps1 -ForceInstall -SetRunOnce
 Executes the script and attempts to force the installation by uninstalling MSTeams before attepmting an installation.
 SetRunOnce will add a RunOnce registry entry and scheduled task to speed up the installation of MSTeams.
@@ -53,8 +61,9 @@ These are the recommended parameters for installation.
 
 .NOTES
 Author:     Sassan Fanai
-Date:       2023-11-13
-Version:    1.0.2.1 - Added SetRunOnce and CreateScheduledTask functions to speed up install. -TryFix param has been replaced by -ForceInstall.
+Date:       2023-11-22
+Version:    1.0.3.2 - Added -DownloadExe parameter that attempts to download Teamsbootstrapper.exe from Microsoft, removing the need of any local other local files.
+                      Functions used for download and verification were stolen with pride from @JankeSkanke and MSEndpointMgr @ https://github.com/MSEndpointMgr/M365Apps. Thank you!
 
 Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
@@ -71,7 +80,9 @@ param (
     [switch]$Uninstall,
     [Alias("TryFix")]
     [switch]$ForceInstall,
-    [switch]$SetRunOnce
+    [switch]$SetRunOnce,
+    [switch]$DownloadExe,
+    $DownloadExeURL = "https://go.microsoft.com/fwlink/?linkid=2243204&clcid=0x409" # URL to Teamsbootstrapper.exe from https://learn.microsoft.com/en-us/microsoftteams/new-teams-bulk-install-client
 )
 
 #region functions
@@ -97,6 +108,7 @@ function CreateScheduledTask {
     Log "Creating scheduled task that will run for the current logged on user to speed up the installation"
     $commands = "Add-AppxPackage -RegisterByFamilyName -MainPackage $PackageName -EA SilentlyContinue"
     Log "Creating scheduled task [$taskName] that will run [$commands] for the currently logged on user [$ActiveUser]"
+
     # Create the action to execute the PowerShell commands
     $action = New-ScheduledTaskAction -Execute "cmd" -Argument "/c start /min `"`" powershell.exe -EP Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -Command `"$commands`""
 
@@ -110,11 +122,11 @@ function CreateScheduledTask {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -StartWhenAvailable
 
     # Register the task (hidden)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    $RegTask = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
 
     Log "Sleeping for a couple of seconds before removing the scheduled task [$taskName] "
     Start-Sleep -Seconds 5
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    $UnregTask = Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
 
@@ -188,10 +200,10 @@ function Install-MSTeams {
         [switch]$Offline
     )
     if ($Offline) {
-        $Result = & "$PSScriptRoot\$EXE" -p -o "$PSScriptRoot\$MSIX"
+        $Result = & "$EXEFolder\$EXE" -p -o "$MSIXFolder\$MSIX"
     }
     else {
-        $Result = & "$PSScriptRoot\$EXE" -p
+        $Result = & "$EXEFolder\$EXE" -p
     }
     $ResultPSO = try { $Result | ConvertFrom-Json } catch {$null}
     if ($null -ne $ResultPSO) {
@@ -211,7 +223,7 @@ function Uninstall-MSTeams {
         $Appx | Remove-AppxPackage -AllUsers
     }
     Log "Deprovisioning MSTeams using $EXE" -NoOutput
-    $Result = & "$PSScriptRoot\$EXE" -x
+    $Result = & "$EXEFolder\$EXE" -x
 
     $ResultPSO = try { $Result | ConvertFrom-Json } catch {$null}
     if ($null -ne $ResultPSO) {
@@ -259,14 +271,109 @@ function Log {
     }
 }
 
+function Start-DownloadFile {
+    param(
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$URL,
+
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path,
+
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name
+    )
+    Begin {
+        # Construct WebClient object
+        $WebClient = New-Object -TypeName System.Net.WebClient
+    }
+    Process {
+        # Create path if it doesn't exist
+        if (-not(Test-Path -Path $Path)) {
+            New-Item -Path $Path -ItemType Directory -Force | Out-Null
+        }
+
+        # Start download of file
+        $WebClient.DownloadFile($URL, (Join-Path -Path $Path -ChildPath $Name))
+    }
+    End {
+        # Dispose of the WebClient object
+        $WebClient.Dispose()
+    }
+}
+function Invoke-FileCertVerification {
+    param(
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$FilePath
+    )
+    # Get a X590Certificate2 certificate object for a file
+    $Cert = (Get-AuthenticodeSignature -FilePath $FilePath).SignerCertificate
+    $CertStatus = (Get-AuthenticodeSignature -FilePath $FilePath).Status
+    if ($Cert){
+        #Verify signed by Microsoft and Validity
+        if ($cert.Subject -match "O=Microsoft Corporation" -and $CertStatus -eq "Valid"){
+            #Verify Chain and check if Root is Microsoft
+            $chain = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Chain
+            $chain.Build($cert) | Out-Null
+            $RootCert = $chain.ChainElements | ForEach-Object {$_.Certificate}| Where-Object {$PSItem.Subject -match "CN=Microsoft Root"}
+            if (-not [string ]::IsNullOrEmpty($RootCert)){
+                #Verify root certificate exists in local Root Store
+                $TrustedRoot = Get-ChildItem -Path "Cert:\LocalMachine\Root" -Recurse | Where-Object { $PSItem.Thumbprint -eq $RootCert.Thumbprint}
+                if (-not [string]::IsNullOrEmpty($TrustedRoot)){
+                    Log "Verified setupfile signed by : $($Cert.Issuer)"
+                    Return $True
+                }
+                else {
+                    Log "No trust found to root cert - aborting"
+                    Return $False
+                }
+            }
+            else {
+                Log "Certificate chain not verified to Microsoft - aborting"
+                Return $False
+            }
+        }
+        else {
+            Log "Certificate not valid or not signed by Microsoft - aborting"
+            Return $False
+        }
+    }
+    else {
+        Log "Setup file not signed - aborting"
+        Return $False
+    }
+}
+
 #endregion functions
 
-if (-not(Test-Path -Path $PSScriptRoot\$EXE)) {
+Log "### Starting Install-MSTeams execution ###"
+$EXEFolder = $PSScriptRoot
+$MSIXFolder = $PSScriptRoot
+
+if ($DownloadExe) {
+    Log "Attempting to download Teamsbootstrapper.exe"
+    Start-DownloadFile -URL $DownloadExeURL -Path $env:TEMP -Name "Teamsbootstrapper.exe"
+    $FileCheck = Invoke-FileCertVerification -FilePath (Join-Path -Path $env:TEMP -ChildPath $EXE)
+    if ($FileCheck) {
+        Log "Verification of downloaded Teamsbootstrapper.exe was successful"
+        $EXEFolder = $Env:TEMP
+    }
+    else {
+        Log "Verification of downloaded Teamsbootstrapper.exe failed"
+    }
+}
+
+
+
+if (-not(Test-Path -Path $EXEFolder\$EXE)) {
     Log "Failed to find $EXE"
     exit 2
 }
 
-$EXEinfo = Get-ChildItem -Path "$PSScriptRoot\$EXE"
+$EXEinfo = Get-ChildItem -Path "$EXEFolder\$EXE"
 
 if ($Uninstall) {
     $LogFile = $LogFile.Replace("Install","Uninstall")
@@ -293,12 +400,12 @@ if ($Uninstall) {
 }
 
 if ($Offline) {
-    if (-not(Test-Path -Path "$PSScriptRoot\$MSIX")) {
+    if (-not(Test-Path -Path "$MSIXFolder\$MSIX")) {
         Log "Offline parameter specified but failed to find $MSIX"
         exit 2
     }
     Log "Attempting to install MSTeams offline with local MSIX"
-    $MSIXinfo = Get-AppLockerFileInformation "$PSScriptRoot\$MSIX"
+    $MSIXinfo = Get-AppLockerFileInformation "$MSIXFolder\$MSIX"
     Log "$EXE version is $($EXEinfo.VersionInfo.ProductVersion)"
     Log "$MSIX version is $($MSIXinfo.Publisher.BinaryVersion.ToString())"
 
@@ -328,6 +435,7 @@ if ($Offline) {
             SetRunOnce -PackageName "$($ProvApp.PackageName)" -RunOnceRegName "InstallMSTeams"
             CreateScheduledTask -PackageName "$($ProvApp.PackageName)"
         }
+        Log "### Finished Install-MSTeams execution ###"
         exit 0
     }
 
@@ -367,6 +475,7 @@ else {
             SetRunOnce -PackageName "$($ProvApp.PackageName)" -RunOnceRegName "InstallMSTeams"
             CreateScheduledTask -PackageName "$($ProvApp.PackageName)"
         }
+        Log "### Finished Install-MSTeams execution ###"
         exit 0
     }
 
