@@ -65,7 +65,7 @@ Date:       2023-11-22
 Version:    1.0.3.2 - Added -DownloadExe parameter that attempts to download Teamsbootstrapper.exe from Microsoft, removing the need of any local other local files.
                       Functions used for download and verification were stolen with pride from @JankeSkanke and MSEndpointMgr @ https://github.com/MSEndpointMgr/M365Apps. Thank you!
 
-Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-NewTeams.ps1" -Offline -ForceInstall
+Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-MSTeams.ps1" -Offline -ForceInstall
 Detection script example 1: if ("MSTeams" -in (Get-ProvisionedAppPackage -Online).DisplayName) { Write-Output "Installed" }
 Detection script example 2: $MinVersion = "23285.3604.2469.4152"
                             $MSTeams = Get-ProvisionedAppPackage -Online |  Where-Object {$PSitem.DisplayName -like "MSTeams"}
