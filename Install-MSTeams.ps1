@@ -55,14 +55,16 @@ Executes the script to first download the Teamsbootstrapper.exe from Microsoft a
 
 .EXAMPLE
 .\Install-MSTeams.ps1 -ForceInstall -SetRunOnce
-Executes the script and attempts to force the installation by uninstalling MSTeams before attepmting an installation.
+Executes the script and attempts to force the installation by uninstalling MSTeams before attempting an installation.
 SetRunOnce will add a RunOnce registry entry and scheduled task to speed up the installation of MSTeams.
 These are the recommended parameters for installation.
 
 .NOTES
 Author:     Sassan Fanai
-Date:       2023-11-22
-Version:    1.0.3.2 - Added -DownloadExe parameter that attempts to download Teamsbootstrapper.exe from Microsoft, removing the need of any local other local files.
+Date:       2025-06-17
+Version:    1.0.3.3 - Chnaged return code logic to workaround issue when output is not a clean JSON object.
+
+            1.0.3.2 - Added -DownloadExe parameter that attempts to download Teamsbootstrapper.exe from Microsoft, removing the need of any other local files.
                       Functions used for download and verification were stolen with pride from @JankeSkanke and MSEndpointMgr @ https://github.com/MSEndpointMgr/M365Apps. Thank you!
 
 Install command example:    %windir%\Sysnative\WindowsPowerShell\v1.0\PowerShell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -WindowStyle Hidden -File ".\Install-MSTeams.ps1" -Offline -ForceInstall
@@ -124,11 +126,10 @@ function CreateScheduledTask {
     # Register the task (hidden)
     $RegTask = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
 
-    Log "Sleeping for a couple of seconds before removing the scheduled task [$taskName] "
+    Log "Sleeping for a couple of seconds before removing the scheduled task [$taskName]"
     Start-Sleep -Seconds 5
     $UnregTask = Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
-
 
 function SetRunOnce {
     param (
@@ -303,6 +304,7 @@ function Start-DownloadFile {
         $WebClient.Dispose()
     }
 }
+
 function Invoke-FileCertVerification {
     param(
         [parameter(Mandatory = $true)]
@@ -427,7 +429,7 @@ if ($Offline) {
         }
     }
     $result = Install-MSTeams -Offline
-    if ($result.Success) {
+    if ($Result -match '"success": true') {
         Log "$EXE ($($EXEinfo.VersionInfo.ProductVersion)) successfully installed $MSIX ($($MSIXinfo.Publisher.BinaryVersion.ToString())) offline"
         if ($SetRunOnce) {
             $ProvApp = Get-ProvisionedAppPackage -Online | Where-Object {$PSItem. DisplayName -eq "MSTeams"}
